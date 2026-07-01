@@ -32,6 +32,7 @@ public final class ToolSession {
     private volatile ToolState state = ToolState.IDLE;
     private final StringBuilder logText = new StringBuilder();
     private final List<Double> cycleTimes = new ArrayList<>();
+    private final List<Boolean> cycleAnomalies = new ArrayList<>();
 
     private ToolState lastState = null;
     private long cycleStartMillis = 0;
@@ -45,6 +46,14 @@ public final class ToolSession {
     private volatile boolean alarmActive = false;
     private volatile String alarmText = "";
     private volatile String lastCommandResult = "";
+    private final long sessionStart = System.currentTimeMillis();
+    private long totalDownMillis = 0;
+    private long downStartMillis = 0;
+    private long goodCycles = 0;
+    private long badCycles = 0;
+    private volatile boolean lastCycleAnomaly = false;
+    private volatile String anomalyNote = "";
+    private final double idealCycleSeconds;
 
     private UpdateListener listener;
     private AuditStore auditStore;
@@ -53,6 +62,13 @@ public final class ToolSession {
         this.name = name;
         this.type = type;
         this.port = port;
+        switch (type.toUpperCase()) {
+            case "ETCHER": idealCycleSeconds = 4.0; break;
+            case "CVD":    idealCycleSeconds = 7.0; break;
+            case "CMP":    idealCycleSeconds = 5.0; break;
+            case "LITHO":  idealCycleSeconds = 6.5; break;
+            default:       idealCycleSeconds = 5.0; break;
+        }
     }
 
     public void setListener(UpdateListener l) { this.listener = l; }
@@ -65,6 +81,7 @@ public final class ToolSession {
     public ToolState state() { return state; }
     public String logText() { return logText.toString(); }
     public List<Double> cycleTimes() { return cycleTimes; }
+    public List<Boolean> cycleAnomalies() { return cycleAnomalies; }
     public long cycleCount() { return cycleCount; }
     public long lastCycleMillis() { return lastCycleMillis; }
     public long currentCycleMillis() { return currentCycleMillis; }
@@ -163,14 +180,86 @@ public final class ToolSession {
             if (cycle < minCycleMillis) minCycleMillis = cycle;
             if (cycle > maxCycleMillis) maxCycleMillis = cycle;
             cycleTimes.add(cycle / 1000.0);
+            goodCycles++;
+            checkAnomaly(cycle / 1000.0);
             double avg = totalCycleMillis / (double) cycleCount;
             drift = (cycleCount >= 3 && cycle > avg * 1.5);
             cycleStartMillis = 0;
+        }
+        // bad cycle: tool went DOWN during an active cycle (anomaly)
+        if (to == ToolState.DOWN && cycleStartMillis > 0) {
+            badCycles++;
+            cycleStartMillis = 0;
+        }
+        // down time tracking
+        if (to == ToolState.DOWN && downStartMillis == 0) {
+            downStartMillis = now;
+        }
+        if (to != ToolState.DOWN && downStartMillis > 0) {
+            totalDownMillis += (now - downStartMillis);
+            downStartMillis = 0;
         }
         if (cycleStartMillis > 0) {
             currentCycleMillis = now - cycleStartMillis;
         }
         lastState = to;
+    }
+
+    public double availability() {
+        long elapsed = System.currentTimeMillis() - sessionStart;
+        long down = totalDownMillis + (downStartMillis > 0 ? System.currentTimeMillis() - downStartMillis : 0);
+        if (elapsed <= 0) return 1.0;
+        double up = (elapsed - down) / (double) elapsed;
+        return Math.max(0.0, Math.min(1.0, up));
+    }
+
+    public double performance() {
+        if (cycleCount == 0) return 1.0;
+        double avgSeconds = (totalCycleMillis / (double) cycleCount) / 1000.0;
+        if (avgSeconds <= 0) return 1.0;
+        double p = idealCycleSeconds / avgSeconds;
+        return Math.max(0.0, Math.min(1.0, p));
+    }
+
+    public double quality() {
+        long total = goodCycles + badCycles;
+        if (total == 0) return 1.0;
+        return goodCycles / (double) total;
+    }
+
+    public boolean lastCycleAnomaly() { return lastCycleAnomaly; }
+    public String anomalyNote() { return anomalyNote; }
+
+    public double oee() {
+        return availability() * performance() * quality();
+    }
+
+    private void checkAnomaly(double newCycleSeconds) {
+        int n = cycleTimes.size();
+        if (n < 6) { lastCycleAnomaly = false; anomalyNote = ""; cycleAnomalies.add(false); return; }
+        // use previous cycles (exclude the newest) as the baseline
+        double sum = 0;
+        for (int i = 0; i < n - 1; i++) sum += cycleTimes.get(i);
+        double mean = sum / (n - 1);
+        double sq = 0;
+        for (int i = 0; i < n - 1; i++) {
+            double d = cycleTimes.get(i) - mean;
+            sq += d * d;
+        }
+        double std = Math.sqrt(sq / (n - 1));
+        if (std < 0.0001) { lastCycleAnomaly = false; anomalyNote = ""; cycleAnomalies.add(false); return; }
+        double z = (newCycleSeconds - mean) / std;
+        if (Math.abs(z) >= 2.5) {
+            lastCycleAnomaly = true;
+            anomalyNote = String.format("ANOMALY: cycle %.1fs is %.1f sigma from mean %.1fs", newCycleSeconds, z, mean);
+            log(anomalyNote);
+            if (auditStore != null) auditStore.recordAlarm(name, true, "ANOMALY", anomalyNote);
+            cycleAnomalies.add(true);
+        } else {
+            lastCycleAnomaly = false;
+            anomalyNote = "";
+            cycleAnomalies.add(false);
+        }
     }
 
     public void sendCommand(String cmd) {

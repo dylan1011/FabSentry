@@ -2,7 +2,7 @@
 
 A SECS/GEM Equipment Simulator and Monitoring Console
 
-FabSentry is a Java Swing desktop application that simulates semiconductor fab equipment using SECS/GEM concepts, and a monitoring console (host) that connects to many tools at once, tracks their state, raises and handles alarms, and keeps an audit trail in a database.
+FabSentry is a Java Swing desktop application that simulates semiconductor fab equipment using SECS/GEM concepts, and a monitoring console (host) that connects to many tools at once, tracks their state, raises and handles alarms, measures OEE, detects anomalies, and keeps an audit trail in a database.
 
 This is a simulator and monitor, not production fab software. It does not talk to real hardware. It is built to demonstrate SECS/GEM domain knowledge, Java Swing UI work, and clean software design.
 
@@ -15,8 +15,10 @@ This is a simulator and monitor, not production fab software. It does not talk t
 - S5 alarms: tools raise and clear alarms (S5F1), both automatically (random process anomaly) and by manual command.
 - Alarm banner in the UI with Clear Alarm and Cancel, plus feedback when a command is rejected in the current state.
 - Audit store: every state change and every alarm is saved to an H2 database on disk.
-- View History button shows the last saved events, and the H2 web console lets you query the data directly.
-- Live per-tool dashboard: state banner, process flow bar, state model diagram, wafer view, timing cards, and a cycle time trend chart.
+- OEE metrics per tool: Availability, Performance, Quality, and the overall OEE score.
+- Anomaly detection on cycle times using a z-score method, marked on the chart and logged.
+- View History button and the H2 web console to inspect the saved data.
+- Live per-tool dashboard: state banner, process flow bar, state model diagram, wafer view, timing cards, OEE card, and a cycle time trend chart.
 - Multi-tool support: add tools from a dropdown, see them all in a list, click to switch.
 - Dark and light themes.
 
@@ -30,6 +32,28 @@ This is a simulator and monitor, not production fab software. It does not talk t
 
 Note: message bodies are simplified (pipe-delimited text), not full binary SECS-II encoding. This is a learning simulator, so the protocol is GEM-flavored but simplified.
 
+## OEE metrics
+
+OEE means Overall Equipment Effectiveness, a core fab KPI. It is three parts multiplied:
+
+- Availability = up time / total time. Down time is measured from DOWN state periods.
+- Performance = ideal cycle time / actual average cycle time.
+- Quality = good cycles / total cycles. A cycle that ends in an anomaly or DOWN counts as bad.
+- OEE = Availability x Performance x Quality.
+
+These are computed from real data the app already collects (state timestamps and cycle times). The OEE card colors green, amber, or red based on the score.
+
+## Anomaly detection
+
+FabSentry uses a simple statistical method on each tool's cycle times:
+
+- It tracks the mean and standard deviation of past cycles.
+- For each new cycle it computes a z-score: (cycle - mean) / standard deviation.
+- If the z-score is 2.5 or more, the cycle is flagged as an anomaly.
+- Anomalies are marked as red dots on the cycle time chart, shown as a note in the banner, and logged to the audit store.
+
+This is a lightweight, explainable form of predictive maintenance. A natural next step would be a model such as isolation forest, run as a separate service.
+
 ## Tech stack
 
 - Java 17, Maven
@@ -38,6 +62,31 @@ Note: message bodies are simplified (pipe-delimited text), not full binary SECS-
 - H2 database (audit store)
 - SLF4J / Logback (logging)
 - JUnit 5 (tests)
+
+## Architecture and design
+
+FabSentry is split into two runnable parts and clear layers.
+
+Two runnable parts:
+
+- ToolSimulator (the equipment): a small TCP server. One process per tool, each on its own port. It runs the GEM state machine, cycles through states, and broadcasts events and alarms.
+- ConsoleApp (the host): the Swing UI. It connects to running tools, sends commands, and shows live state, timing, OEE, and anomalies.
+
+Layers (packages):
+
+- protocol: the SECS-II style message model (SecsMessage) and helpers (SecsMessages) for building and detecting message types.
+- transport: HSMS-style framing over TCP (SecsConnection) with length-prefixed frames.
+- domain: the tool state enum (ToolState) and the thread-safe GEM state machine (GemStateMachine) with legal transition rules.
+- tool: the equipment simulator (ToolSimulator).
+- console: the monitoring UI (ConsoleApp) and per-tool state holder (ToolSession), plus custom UI panels (flow bar, wafer, chart, state diagram).
+- audit: a storage interface (AuditStore) and an H2 implementation (H2AuditStore).
+
+Key design choices:
+
+- Host and equipment are separate processes that talk only through the SECS-style protocol over TCP. This mirrors the real host/equipment split.
+- Each tool has its own ToolSession in the console, holding its own state, timing, cycle history, alarms, and anomaly flags. This makes multi-tool support clean.
+- The audit store is behind an interface. Today it uses H2. To scale up later, an implementation for a server database like PostgreSQL can be swapped in without changing the rest of the app.
+- UI panels are custom-painted for the flow bar, wafer, and state diagram, and theme-aware for dark and light modes.
 
 ## Project structure
 
@@ -120,11 +169,11 @@ Two ways to see the data:
 
 Planned or possible next steps:
 
-- OEE metrics (Availability, Performance, Quality, and overall OEE) per tool.
-- Anomaly detection on cycle times to flag tools drifting before failure.
-- Load and analyze a real equipment log file.
+- Real ML anomaly model (isolation forest) as a separate service.
+- Yield correlation between equipment events and downstream results.
 - Reliability: auto-reconnect and safer message handling.
 - Configurable ports, tool names, and timings via a config file.
+- Message bus (Kafka) telemetry path to show how it scales to many tools.
 
 ## Scope and honesty
 

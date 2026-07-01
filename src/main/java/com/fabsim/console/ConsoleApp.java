@@ -54,6 +54,10 @@ public final class ConsoleApp extends JFrame {
     private final JLabel cycleCountValue = new JLabel("0");
     private final JLabel currentCycleValue = new JLabel("-");
     private final JLabel driftLabel = new JLabel(" ");
+    private final JLabel oeeValue = new JLabel("-");
+    private final JLabel availValue = new JLabel("-");
+    private final JLabel perfValue = new JLabel("-");
+    private final JLabel qualValue = new JLabel("-");
     private final JLabel alarmLabel = new JLabel(" ");
     private final JPanel alarmBanner = new JPanel(new BorderLayout(8, 0));
     private final RoundButton bannerClearButton = new RoundButton("Clear Alarm");
@@ -63,6 +67,7 @@ public final class ConsoleApp extends JFrame {
     private CardPanel diagramCard;
     private CardPanel timingCard;
     private CardPanel chartCard;
+    private CardPanel oeeCard;
     private CardPanel cmdCard;
     private CardPanel logCard;
     private CardPanel listCard;
@@ -115,6 +120,19 @@ public final class ConsoleApp extends JFrame {
         for (int i = 0; i < statInners.size(); i++) {
             applyStatColor(statInners.get(i), statValues.get(i));
         }
+    }
+
+    private JPanel miniStat(String label, JLabel valueLabel) {
+        JPanel p = new JPanel(new BorderLayout());
+        p.setOpaque(false);
+        JLabel top = new JLabel(label, SwingConstants.CENTER);
+        top.setForeground(new Color(150, 154, 164));
+        top.setFont(top.getFont().deriveFont(11f));
+        valueLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        valueLabel.setFont(valueLabel.getFont().deriveFont(Font.BOLD, 15f));
+        p.add(top, BorderLayout.NORTH);
+        p.add(valueLabel, BorderLayout.CENTER);
+        return p;
     }
 
     private JLabel sectionLabel(String text) {
@@ -201,6 +219,21 @@ public final class ConsoleApp extends JFrame {
         chartCard.add(sectionLabel("CYCLE TIME TREND"), BorderLayout.NORTH);
         chartCard.add(cycleChart, BorderLayout.CENTER);
 
+        oeeCard = new CardPanel(new BorderLayout(6, 6));
+        oeeCard.add(sectionLabel("OEE  (OVERALL EQUIPMENT EFFECTIVENESS)"), BorderLayout.NORTH);
+        JPanel oeeCenter = new JPanel(new BorderLayout(4, 4));
+        oeeCenter.setOpaque(false);
+        oeeValue.setFont(oeeValue.getFont().deriveFont(Font.BOLD, 34f));
+        oeeValue.setHorizontalAlignment(SwingConstants.CENTER);
+        oeeCenter.add(oeeValue, BorderLayout.NORTH);
+        JPanel oeeParts = new JPanel(new GridLayout(1, 3, 10, 0));
+        oeeParts.setOpaque(false);
+        oeeParts.add(miniStat("Availability", availValue));
+        oeeParts.add(miniStat("Performance", perfValue));
+        oeeParts.add(miniStat("Quality", qualValue));
+        oeeCenter.add(oeeParts, BorderLayout.CENTER);
+        oeeCard.add(oeeCenter, BorderLayout.CENTER);
+
         JPanel center = new JPanel();
         center.setOpaque(false);
         this.centerPanel = center;
@@ -240,6 +273,9 @@ public final class ConsoleApp extends JFrame {
         center.add(timingCard);
         center.add(Box.createVerticalStrut(10));
         center.add(chartCard);
+        center.add(Box.createVerticalStrut(10));
+        oeeCard.setAlignmentX(Component.LEFT_ALIGNMENT);
+        center.add(oeeCard);
 
         JScrollPane centerScroll = new JScrollPane(center);
         centerScroll.setBorder(null);
@@ -355,6 +391,14 @@ public final class ConsoleApp extends JFrame {
         currentCycleValue.setText(fmt(selected.currentCycleMillis()));
         cycleCountValue.setText(String.valueOf(selected.cycleCount()));
         driftLabel.setText(selected.drift() ? "DRIFT ALERT: last cycle much slower than average" : " ");
+        double oee = selected.oee();
+        oeeValue.setText(String.format("%.0f%%", oee * 100));
+        if (oee >= 0.85) oeeValue.setForeground(new Color(47, 168, 79));
+        else if (oee >= 0.60) oeeValue.setForeground(new Color(224, 164, 35));
+        else oeeValue.setForeground(new Color(214, 69, 69));
+        availValue.setText(String.format("%.0f%%", selected.availability() * 100));
+        perfValue.setText(String.format("%.0f%%", selected.performance() * 100));
+        qualValue.setText(String.format("%.0f%%", selected.quality() * 100));
         String reject = selected.lastCommandResult();
         if (selected.alarmActive()) {
             if (!bannerCancelled) {
@@ -362,6 +406,11 @@ public final class ConsoleApp extends JFrame {
                 alarmBanner.setBackground(new Color(214, 69, 69));
                 alarmBanner.setVisible(true);
             }
+        } else if (selected.lastCycleAnomaly()) {
+            alarmLabel.setText(selected.anomalyNote());
+            alarmBanner.setBackground(new Color(224, 120, 35));
+            bannerClearButton.setVisible(false);
+            alarmBanner.setVisible(true);
         } else if (reject != null && !reject.isEmpty()) {
             alarmLabel.setText(reject);
             alarmBanner.setBackground(new Color(224, 120, 35));
@@ -374,8 +423,10 @@ public final class ConsoleApp extends JFrame {
         }
 
         java.util.List<Double> times = selected.cycleTimes();
+        java.util.List<Boolean> anomalies = selected.cycleAnomalies();
         while (shownChartCount < times.size()) {
-            cycleChart.addCycle(times.get(shownChartCount));
+            boolean anom = shownChartCount < anomalies.size() && anomalies.get(shownChartCount);
+            cycleChart.addCycle(times.get(shownChartCount), anom);
             shownChartCount++;
         }
 
@@ -428,6 +479,7 @@ public final class ConsoleApp extends JFrame {
             diagramCard.setDarkMode(darkMode);
             timingCard.setDarkMode(darkMode);
             chartCard.setDarkMode(darkMode);
+            oeeCard.setDarkMode(darkMode);
             cmdCard.setDarkMode(darkMode);
             logCard.setDarkMode(darkMode);
             listCard.setDarkMode(darkMode);

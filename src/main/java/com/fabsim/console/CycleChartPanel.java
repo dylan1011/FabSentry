@@ -15,6 +15,7 @@ import java.awt.*;
 public final class CycleChartPanel extends JPanel {
 
     private final XYSeries series = new XYSeries("Cycle time");
+    private final XYSeries anomalySeries = new XYSeries("Anomaly");
     private final JFreeChart chart;
     private int cycleIndex = 0;
 
@@ -23,6 +24,7 @@ public final class CycleChartPanel extends JPanel {
         setOpaque(false);
 
         XYSeriesCollection dataset = new XYSeriesCollection(series);
+        dataset.addSeries(anomalySeries);
         chart = ChartFactory.createXYLineChart(
                 null,
                 "Cycle number",
@@ -38,6 +40,9 @@ public final class CycleChartPanel extends JPanel {
         XYLineAndShapeRenderer renderer = new XYLineAndShapeRenderer(true, true);
         renderer.setSeriesPaint(0, new Color(47, 127, 224));
         renderer.setSeriesStroke(0, new BasicStroke(2f));
+        renderer.setSeriesPaint(1, new Color(214, 69, 69));
+        renderer.setSeriesLinesVisible(1, false);
+        renderer.setSeriesShapesVisible(1, true);
         plot.setRenderer(renderer);
 
         ChartPanel chartPanel = new ChartPanel(chart);
@@ -47,13 +52,19 @@ public final class CycleChartPanel extends JPanel {
     }
 
     public void addCycle(double seconds) {
+        addCycle(seconds, false);
+    }
+
+    public void addCycle(double seconds, boolean anomaly) {
         cycleIndex++;
         series.add(cycleIndex, seconds);
+        if (anomaly) anomalySeries.add(cycleIndex, seconds);
     }
 
 
     public void reset() {
         series.clear();
+        anomalySeries.clear();
         cycleIndex = 0;
     }
 
