@@ -1,6 +1,8 @@
 package com.fabsim.console;
 
 import com.fabsim.domain.ToolState;
+import com.fabsim.audit.AuditStore;
+import com.fabsim.audit.H2AuditStore;
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
 
@@ -41,6 +43,9 @@ public final class ConsoleApp extends JFrame {
     private final RoundButton resumeButton = new RoundButton("Resume");
     private final RoundButton downButton = new RoundButton("Set Down");
     private final RoundButton recoverButton = new RoundButton("Recover");
+    private final RoundButton raiseAlarmButton = new RoundButton("Raise Alarm");
+    private final RoundButton clearAlarmButton = new RoundButton("Clear Alarm");
+    private final RoundButton historyButton = new RoundButton("View History");
 
     private final JLabel lastCycleValue = new JLabel("-");
     private final JLabel avgCycleValue = new JLabel("-");
@@ -49,6 +54,11 @@ public final class ConsoleApp extends JFrame {
     private final JLabel cycleCountValue = new JLabel("0");
     private final JLabel currentCycleValue = new JLabel("-");
     private final JLabel driftLabel = new JLabel(" ");
+    private final JLabel alarmLabel = new JLabel(" ");
+    private final JPanel alarmBanner = new JPanel(new BorderLayout(8, 0));
+    private final RoundButton bannerClearButton = new RoundButton("Clear Alarm");
+    private final RoundButton bannerCancelButton = new RoundButton("Cancel");
+    private boolean bannerCancelled = false;
 
     private CardPanel diagramCard;
     private CardPanel timingCard;
@@ -60,6 +70,7 @@ public final class ConsoleApp extends JFrame {
     private JPanel centerPanel;
     private JPanel topBarPanel;
     private JPanel leftTopPanel;
+    private final AuditStore auditStore = new H2AuditStore();
     private boolean darkMode = true;
     private ToolSession selected;
     private int shownChartCount = 0;
@@ -204,6 +215,23 @@ public final class ConsoleApp extends JFrame {
         stateBanner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 70));
         flowBar.setMaximumSize(new Dimension(Integer.MAX_VALUE, 80));
         center.add(stateBanner);
+        alarmLabel.setForeground(Color.WHITE);
+        alarmLabel.setFont(alarmLabel.getFont().deriveFont(Font.BOLD, 13f));
+        bannerClearButton.setPreferredSize(new Dimension(120, 30));
+        bannerCancelButton.setPreferredSize(new Dimension(90, 30));
+        JPanel bannerButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+        bannerButtons.setOpaque(false);
+        bannerButtons.add(bannerClearButton);
+        bannerButtons.add(bannerCancelButton);
+        alarmBanner.setBackground(new Color(214, 69, 69));
+        alarmBanner.setBorder(new EmptyBorder(8, 12, 8, 12));
+        alarmBanner.add(alarmLabel, BorderLayout.WEST);
+        alarmBanner.add(bannerButtons, BorderLayout.EAST);
+        alarmBanner.setAlignmentX(Component.LEFT_ALIGNMENT);
+        alarmBanner.setMaximumSize(new Dimension(Integer.MAX_VALUE, 48));
+        alarmBanner.setVisible(false);
+        center.add(Box.createVerticalStrut(8));
+        center.add(alarmBanner);
         center.add(Box.createVerticalStrut(10));
         center.add(flowBar);
         center.add(Box.createVerticalStrut(10));
@@ -226,6 +254,9 @@ public final class ConsoleApp extends JFrame {
         cmdCard.add(resumeButton);
         cmdCard.add(downButton);
         cmdCard.add(recoverButton);
+        cmdCard.add(raiseAlarmButton);
+        cmdCard.add(clearAlarmButton);
+        cmdCard.add(historyButton);
 
         eventLog.setEditable(false);
         eventLog.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -260,6 +291,11 @@ public final class ConsoleApp extends JFrame {
         resumeButton.addActionListener(e -> sendCmd("RESUME"));
         downButton.addActionListener(e -> sendCmd("DOWN"));
         recoverButton.addActionListener(e -> sendCmd("RECOVER"));
+        raiseAlarmButton.addActionListener(e -> sendCmd("RAISE_ALARM"));
+        clearAlarmButton.addActionListener(e -> sendCmd("CLEAR_ALARM"));
+        bannerClearButton.addActionListener(e -> { sendCmd("CLEAR_ALARM"); alarmBanner.setVisible(false); });
+        bannerCancelButton.addActionListener(e -> { bannerCancelled = true; alarmBanner.setVisible(false); });
+        historyButton.addActionListener(e -> showHistory());
         themeToggle.addActionListener(e -> toggleTheme());
     }
 
@@ -279,6 +315,7 @@ public final class ConsoleApp extends JFrame {
             return;
         }
         ToolSession session = new ToolSession(type + "-1", type, port);
+        session.setAuditStore(auditStore);
         session.setListener(s -> SwingUtilities.invokeLater(() -> {
             toolList.repaint();
             if (s == selected) refreshSelected();
@@ -291,6 +328,7 @@ public final class ConsoleApp extends JFrame {
 
     private void selectTool(ToolSession session) {
         this.selected = session;
+        this.bannerCancelled = false;
         this.shownChartCount = 0;
         cycleChart.reset();
         if (session == null) {
@@ -317,6 +355,23 @@ public final class ConsoleApp extends JFrame {
         currentCycleValue.setText(fmt(selected.currentCycleMillis()));
         cycleCountValue.setText(String.valueOf(selected.cycleCount()));
         driftLabel.setText(selected.drift() ? "DRIFT ALERT: last cycle much slower than average" : " ");
+        String reject = selected.lastCommandResult();
+        if (selected.alarmActive()) {
+            if (!bannerCancelled) {
+                alarmLabel.setText("ALARM  -  " + selected.alarmText());
+                alarmBanner.setBackground(new Color(214, 69, 69));
+                alarmBanner.setVisible(true);
+            }
+        } else if (reject != null && !reject.isEmpty()) {
+            alarmLabel.setText(reject);
+            alarmBanner.setBackground(new Color(224, 120, 35));
+            bannerClearButton.setVisible(false);
+            alarmBanner.setVisible(true);
+        } else {
+            alarmBanner.setVisible(false);
+            bannerClearButton.setVisible(true);
+            bannerCancelled = false;
+        }
 
         java.util.List<Double> times = selected.cycleTimes();
         while (shownChartCount < times.size()) {
@@ -326,6 +381,23 @@ public final class ConsoleApp extends JFrame {
 
         eventLog.setText(selected.logText());
         eventLog.setCaretPosition(eventLog.getDocument().getLength());
+    }
+
+    private void showHistory() {
+        java.util.List<String> rows = auditStore.recentEvents(50);
+        JTextArea area = new JTextArea();
+        area.setEditable(false);
+        area.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        if (rows.isEmpty()) {
+            area.setText("No saved events yet.");
+        } else {
+            StringBuilder sb = new StringBuilder();
+            for (String r : rows) sb.append(r).append("\n");
+            area.setText(sb.toString());
+        }
+        JScrollPane sp = new JScrollPane(area);
+        sp.setPreferredSize(new Dimension(600, 400));
+        JOptionPane.showMessageDialog(this, sp, "Audit History (last 50 state changes)", JOptionPane.PLAIN_MESSAGE);
     }
 
     private void sendCmd(String cmd) {
@@ -365,6 +437,11 @@ public final class ConsoleApp extends JFrame {
             resumeButton.setDarkMode(darkMode);
             downButton.setDarkMode(darkMode);
             recoverButton.setDarkMode(darkMode);
+            raiseAlarmButton.setDarkMode(darkMode);
+            clearAlarmButton.setDarkMode(darkMode);
+            historyButton.setDarkMode(darkMode);
+            bannerClearButton.setDarkMode(darkMode);
+            bannerCancelButton.setDarkMode(darkMode);
             refreshStatColors();
             eventLog.setBackground(darkMode ? new Color(22, 24, 29) : new Color(255, 255, 255));
             eventLog.setForeground(darkMode ? new Color(210, 213, 220) : new Color(40, 44, 54));
@@ -381,6 +458,8 @@ public final class ConsoleApp extends JFrame {
         resumeButton.setEnabled(on);
         downButton.setEnabled(on);
         recoverButton.setEnabled(on);
+        raiseAlarmButton.setEnabled(on);
+        clearAlarmButton.setEnabled(on);
     }
 
     private String fmt(long millis) {
@@ -438,8 +517,13 @@ public final class ConsoleApp extends JFrame {
             nameLabel.setText(value.name());
             nameLabel.setForeground(isSelected ? Color.WHITE : (darkMode ? new Color(220, 223, 230) : new Color(40, 44, 54)));
             String dot = value.isConnected() ? "\u25CF " : "\u25CB ";
-            stateLabel.setText(dot + value.state().name());
-            stateLabel.setForeground(isSelected ? Color.WHITE : colorFor(value.state()));
+            if (value.alarmActive()) {
+                stateLabel.setText("\u25CF ALARM");
+                stateLabel.setForeground(isSelected ? Color.WHITE : new Color(214, 69, 69));
+            } else {
+                stateLabel.setText(dot + value.state().name());
+                stateLabel.setForeground(isSelected ? Color.WHITE : colorFor(value.state()));
+            }
             return this;
         }
     }

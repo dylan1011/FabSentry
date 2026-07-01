@@ -43,4 +43,12 @@ public final class SecsMessages {
     public static boolean isCommandAck(SecsMessage m) {
         return m.stream() == 2 && m.function() == 42;
     }
+
+    public static SecsMessage s5f1(boolean set, String alarmId, String text) {
+        return new SecsMessage(5, 1, false, "ALARM|" + (set ? "SET" : "CLEAR") + "|" + alarmId + "|" + text);
+    }
+
+    public static boolean isAlarmReport(SecsMessage m) {
+        return m.stream() == 5 && m.function() == 1;
+    }
 }

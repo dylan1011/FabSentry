@@ -8,3 +8,8 @@ target/
 .DS_Store
 *.log
 *.class
+
+# H2 database files
+fabsentry-audit*.db
+*.mv.db
+*.trace.db

@@ -111,9 +111,17 @@ public final class ToolSimulator {
                 return gem.transition(ToolState.PROCESSING, "manual resume");
             case "DOWN":
                 autoRunning.set(false);
+                broadcast(SecsMessages.s5f1(true, "ALM-100", name + " equipment down"));
                 return gem.transition(ToolState.DOWN, "manual down");
             case "RECOVER":
+                broadcast(SecsMessages.s5f1(false, "ALM-100", name + " recovered"));
                 return gem.transition(ToolState.IDLE, "manual recover");
+            case "RAISE_ALARM":
+                broadcast(SecsMessages.s5f1(true, "ALM-200", name + " manual alarm"));
+                return true;
+            case "CLEAR_ALARM":
+                broadcast(SecsMessages.s5f1(false, "ALM-200", name + " alarm cleared"));
+                return true;
             default:
                 log("Unknown command: " + command);
                 return false;
@@ -146,6 +154,11 @@ public final class ToolSimulator {
                 long extra = (long) (Math.random() * processVar);
                 return run(ToolState.PROCESSING, "auto: begin process", processBase + extra);
             case PROCESSING:
+                if (Math.random() < 0.12) {
+                    broadcast(SecsMessages.s5f1(true, "ALM-300", name + " process anomaly, going down"));
+                    autoRunning.set(false);
+                    return gem.transition(ToolState.DOWN, "auto: anomaly");
+                }
                 return run(ToolState.COMPLETE, "auto: process done", 1000);
             case COMPLETE:
                 return run(ToolState.IDLE, "auto: unload wafer", 1000);

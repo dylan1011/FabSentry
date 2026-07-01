@@ -4,6 +4,7 @@ import com.fabsim.domain.ToolState;
 import com.fabsim.protocol.SecsMessage;
 import com.fabsim.protocol.SecsMessages;
 import com.fabsim.transport.SecsConnection;
+import com.fabsim.audit.AuditStore;
 
 import java.io.IOException;
 import java.net.Socket;
@@ -41,8 +42,12 @@ public final class ToolSession {
     private long lastCycleMillis = 0;
     private long currentCycleMillis = 0;
     private boolean drift = false;
+    private volatile boolean alarmActive = false;
+    private volatile String alarmText = "";
+    private volatile String lastCommandResult = "";
 
     private UpdateListener listener;
+    private AuditStore auditStore;
 
     public ToolSession(String name, String type, int port) {
         this.name = name;
@@ -51,6 +56,7 @@ public final class ToolSession {
     }
 
     public void setListener(UpdateListener l) { this.listener = l; }
+    public void setAuditStore(AuditStore store) { this.auditStore = store; }
 
     public String name() { return name; }
     public String type() { return type; }
@@ -66,6 +72,9 @@ public final class ToolSession {
     public long maxCycleMillis() { return maxCycleMillis; }
     public long avgCycleMillis() { return cycleCount == 0 ? 0 : totalCycleMillis / cycleCount; }
     public boolean drift() { return drift; }
+    public boolean alarmActive() { return alarmActive; }
+    public String alarmText() { return alarmText; }
+    public String lastCommandResult() { return lastCommandResult; }
 
     public boolean connect() {
         try {
@@ -87,6 +96,13 @@ public final class ToolSession {
                     SecsMessage m = connection.receive();
                     if (SecsMessages.isEventReport(m)) {
                         handleEvent(m.body());
+                    } else if (SecsMessages.isAlarmReport(m)) {
+                        handleAlarm(m.body());
+                    } else if (SecsMessages.isCommandAck(m)) {
+                        boolean ok = m.body().equals("ACK");
+                        lastCommandResult = ok ? "" : "Command rejected by tool (not allowed in current state)";
+                        if (!ok) log("COMMAND REJECTED by tool");
+                        fire();
                     } else if (SecsMessages.isOnLineData(m)) {
                         log("Tool identity: " + m.body().replace("|", " rev "));
                         fire();
@@ -102,6 +118,19 @@ public final class ToolSession {
         reader.start();
     }
 
+    private void handleAlarm(String body) {
+        // body format: ALARM|SET|<id>|<text>
+        String[] parts = body.split("\\|");
+        boolean set = parts.length > 1 && parts[1].equals("SET");
+        String id = parts.length > 2 ? parts[2] : "";
+        String text = parts.length > 3 ? parts[3] : "";
+        alarmActive = set;
+        alarmText = set ? (id + ": " + text) : "";
+        if (auditStore != null) auditStore.recordAlarm(name, set, id, text);
+        log((set ? "ALARM SET " : "ALARM CLEAR ") + id + "  (" + text + ")");
+        fire();
+    }
+
     private void handleEvent(String body) {
         String[] parts = body.split("\\|");
         String transition = parts.length > 1 ? parts[1] : "";
@@ -111,7 +140,9 @@ public final class ToolSession {
         log("EVENT " + transition + "  (" + reason + ")");
         try {
             ToolState to = ToolState.valueOf(toName);
+            ToolState from = state;
             state = to;
+            if (auditStore != null) auditStore.recordStateChange(name, String.valueOf(from), to.name(), reason);
             updateTiming(to);
         } catch (IllegalArgumentException ex) {
             log("PARSE FAIL toName=[" + toName + "]");
